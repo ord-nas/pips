@@ -8,6 +8,7 @@
 #include <iostream>
 #include <ostream>
 #include <limits>
+#include <memory>
 
 void die(const std::string& msg) {
   std::cerr << msg << std::endl;
@@ -45,23 +46,48 @@ private:
 using CellId = uint8_t;
 using DominoId = uint8_t;
 using ConstraintId = uint8_t;
+using PositionId = uint16_t;
 using Value = uint8_t;
 
 struct Domino {
   DominoId id;
   Value lower_value;
   Value upper_value;
+
+  bool IsDouble() const {
+    return lower_value == upper_value;
+  }
 };
 
 struct Position {
   CellId lower_cell;
   CellId upper_cell;
+
+  PositionId GetId() const {
+    return static_cast<PositionId>(lower_cell) << 8 + upper_cell;
+  }
 };
 
 struct Move {
   Position position;
-  DominoId domino;
+  Domino domino;
   bool flipped;
+
+  std::pair<CellId, Value> GetLowerAssignment() const {
+    if (flipped) {
+      return std::make_pair(position.lower_cell, domino.upper_value);
+    } else {
+      return std::make_pair(position.lower_cell, domino.lower_value);
+    }
+  }
+
+  std::pair<CellId, Value> GetUpperAssignment() const {
+    if (flipped) {
+      return std::make_pair(position.upper_cell, domino.lower_value);
+    } else {
+      return std::make_pair(position.upper_cell, domino.upper_value);
+    }
+  }
 };
 
 struct Identical {};
@@ -82,6 +108,176 @@ struct Constraint {
   ConstraintType type;
   std::vector<CellId> cells;
 };
+
+class ConstraintState {
+public:
+  virtual ~ConstraintState() {}
+  
+  virtual void AddValue(Value value) = 0;
+  virtual void RemoveValue(Value value) = 0;
+  virtual bool IsValid() const = 0;
+};
+
+class AlwaysTrueState : public ConstraintState {
+public:
+  AlwaysTrueState() = default;
+
+  void AddValue(Value value) final {}
+
+  void RemoveValue(Value value) final {}
+
+  bool IsValid() const final { return true; }
+};
+
+class IdenticalState : public ConstraintState {
+public:
+  IdenticalState() = default;
+
+  void AddValue(Value value) final {
+    ++value_counts_[value];
+  }
+
+  void RemoveValue(Value value) final {
+    --value_counts_[value];
+  }
+
+  bool IsValid() const final {
+    int distinct_values = 0;
+    for (int count : value_counts_) {
+      if (count > 0) {
+	++distinct_values;
+      }
+    }
+    return distinct_values <= 1;
+  }
+
+private:
+  std::array<int, 7> value_counts_ = {0, 0, 0, 0, 0, 0, 0};
+};
+
+class DistinctState : public ConstraintState {
+public:
+  DistinctState() = default;
+
+  void AddValue(Value value) final {
+    ++value_counts_[value];
+  }
+
+  void RemoveValue(Value value) final {
+    --value_counts_[value];
+  }
+
+  bool IsValid() const final {
+    for (int count : value_counts_) {
+      if (count > 1) {
+	return false;
+      }
+    }
+    return true;
+  }
+  
+private:
+  std::array<int, 7> value_counts_ = {0, 0, 0, 0, 0, 0, 0};
+};
+
+class SumEqualToState : public ConstraintState {
+public:
+  SumEqualToState(Value target, int cells)
+    : value_remaining_(target), cells_remaining_(cells)  {}
+
+  void AddValue(Value value) final {
+    value_remaining_ -= value;
+    --cells_remaining_;
+  }
+
+  void RemoveValue(Value value) final {
+    value_remaining_ += value;
+    ++cells_remaining_;
+  }
+
+  bool IsValid() const final {
+    return value_remaining_ >= 0 && value_remaining_ <= cells_remaining_ * 6;
+  }
+  
+private:
+  int value_remaining_ = 0;
+  int cells_remaining_ = 0;
+};
+
+class SumLessThanState : public ConstraintState {
+public:
+  SumLessThanState(Value target, int cells)
+    : value_remaining_(target) {}
+
+  void AddValue(Value value) final {
+    value_remaining_ -= value;
+  }
+
+  void RemoveValue(Value value) final {
+    value_remaining_ += value;
+  }
+
+  bool IsValid() const final {
+    return value_remaining_ > 0;
+  }
+  
+private:
+  int value_remaining_ = 0;
+};
+
+class SumGreaterThanState : public ConstraintState {
+public:
+  SumGreaterThanState(Value target, int cells)
+    : value_remaining_(target), cells_remaining_(cells)  {}
+
+  void AddValue(Value value) final {
+    value_remaining_ -= value;
+    --cells_remaining_;
+  }
+
+  void RemoveValue(Value value) final {
+    value_remaining_ += value;
+    ++cells_remaining_;
+  }
+
+  bool IsValid() const final {
+    return value_remaining_ - 6 * cells_remaining_ < 0;
+  }
+  
+private:
+  int value_remaining_ = 0;
+  int cells_remaining_ = 0;
+};
+
+struct MakeConstraintStateVisitor {
+public:
+  explicit MakeConstraintStateVisitor(const Constraint& constraint)
+    : num_cells_(constraint.cells.size()) {}
+  
+  std::unique_ptr<ConstraintState> operator()(const Identical& identical) const {
+    return std::make_unique<IdenticalState>();
+  }
+  std::unique_ptr<ConstraintState> operator()(const Distinct& distinct) const {
+    return std::make_unique<DistinctState>();
+  }
+  std::unique_ptr<ConstraintState> operator()(const SumEqualTo& sum_equal_to) const {
+    return std::make_unique<SumEqualToState>(sum_equal_to.value, num_cells_);
+  }
+  std::unique_ptr<ConstraintState> operator()(const SumLessThan& sum_less_than) const {
+    return std::make_unique<SumLessThanState>(sum_less_than.value, num_cells_);
+  }
+  std::unique_ptr<ConstraintState> operator()(const SumGreaterThan& sum_greater_than) const {
+    return std::make_unique<SumGreaterThanState>(sum_greater_than.value, num_cells_);
+  }
+
+private:
+  int num_cells_ = 0;
+};
+
+std::unique_ptr<ConstraintState> MakeConstraintState(const Constraint& constraint) {
+  MakeConstraintStateVisitor visitor(constraint);
+  return std::visit(visitor, constraint.type);
+}
 
 void PrintCharGrid(const Grid<char>& print_grid) {
   for (int r = 0; r < print_grid.num_rows(); ++r) {
@@ -215,6 +411,79 @@ struct Puzzle {
     }
   }
 };
+
+int CountCells(const Grid<std::optional<CellId>>& grid) {
+  int count = 0;
+  for (int r = 0; r < grid.num_rows(); ++r) {
+    for (int c = 0; c < grid.num_cols(); ++c) {
+      const std::optional<CellId> cell = grid.Get(r, c);
+      if (cell.has_value()) {
+	++count;
+      }
+    }
+  }
+  return count;
+}
+
+class ConstraintManager {
+public:
+  ConstraintManager(const Puzzle& puzzle) {
+    const int num_cells = CountCells(puzzle.grid);
+    cell_to_constraint_state_.resize(num_cells, nullptr);
+    
+    for (const Constraint& constraint : puzzle.constraints) {
+      constraint_states_.push_back(MakeConstraintState(constraint));
+      ConstraintState* constraint_state = constraint_states_.back().get();
+      for (CellId cell : constraint.cells) {
+	cell_to_constraint_state_[cell] = constraint_state;
+      }
+    }
+
+    constraint_states_.push_back(std::make_unique<AlwaysTrueState>());
+    ConstraintState* always_true_state = constraint_states_.back().get();
+    for (CellId cell = 0; cell < num_cells; ++cell) {
+      if (cell_to_constraint_state_[cell] == nullptr) {
+	cell_to_constraint_state_[cell] = always_true_state;
+      }
+    }
+  }
+
+  void MakeMove(const Move& move) {
+    for (const auto [cell_id, value] : {move.GetLowerAssignment(),
+					move.GetUpperAssignment()}) {
+      cell_to_constraint_state_[cell_id]->AddValue(value);
+    }
+  }
+
+  void UnmakeMove(const Move& move) {
+    for (const auto [cell_id, value] : {move.GetLowerAssignment(),
+					move.GetUpperAssignment()}) {
+      cell_to_constraint_state_[cell_id]->RemoveValue(value);
+    }
+  }
+
+  bool IsValidMove(const Move& move) {
+    const auto lower_assignment = move.GetLowerAssignment();
+    const auto upper_assignment = move.GetUpperAssignment();
+    ConstraintState* lower_constraint = cell_to_constraint_state_[lower_assignment.first];
+    ConstraintState* upper_constraint = cell_to_constraint_state_[upper_assignment.first];
+
+    lower_constraint->AddValue(lower_assignment.second);
+    upper_constraint->AddValue(upper_assignment.second);
+
+    const bool valid = lower_constraint->IsValid() && upper_constraint->IsValid();
+
+    upper_constraint->RemoveValue(upper_assignment.second);
+    lower_constraint->RemoveValue(lower_assignment.second);
+
+    return valid;
+  }
+  
+private:
+  std::vector<std::unique_ptr<ConstraintState>> constraint_states_;
+  std::vector<ConstraintState*> cell_to_constraint_state_;
+};
+
 
 std::vector<std::string> ReadNonEmptyLines() {
   std::vector<std::string> lines;
@@ -413,62 +682,6 @@ Puzzle ReadPuzzle() {
   };
 }
 
-struct CheckConstraintVisitor {
-public:
-  explicit CheckConstraintVisitor(const Constraint& constraint,
-				  const std::vector<std::optional<Value>>& cell_to_value)
-    : constraint(constraint),
-      cell_to_value(cell_to_value) {}
-  
-  bool operator()(const Identical& all_equal) const {
-    std::optional<Value> constraint_value;
-    for (const CellId cell : constraint.cells) {
-      const std::optional<Value> cell_value = cell_to_value[cell];
-      if (cell_value.has_value() && constraint_value.has_value() &&
-	  *cell_value != *constraint_value) {
-	return false;
-      }
-      if (cell_value.has_value()) {
-	constraint_value = cell_value;
-      }
-    }
-    return true;
-  }
-  bool operator()(const Distinct& distinct) const {
-    std::array<bool, 6> seen = {false, false, false, false, false, false};
-    for (const CellId cell : constraint.cells) {
-      const std::optional<Value> cell_value = cell_to_value[cell];
-      if (!cell_value.has_value()) {
-	continue;
-      }
-      if (seen[*cell_value]) {
-	return false;
-      }
-      seen[*cell_value] = true;
-    }
-    return true;
-  }
-  bool operator()(const SumEqualTo& equal_to) const {
-    return true;
-  }
-  bool operator()(const SumLessThan& less_than) const {
-    return true;
-  }
-  bool operator()(const SumGreaterThan& greater_than) const {
-    return true;
-  }
-
-private:
-  const Constraint& constraint;
-  const std::vector<std::optional<Value>>& cell_to_value;
-};
-
-bool CheckConstraint(const Constraint& constraint,
-		     const std::vector<std::optional<Value>>& cell_to_value) {
-  CheckConstraintVisitor visitor(constraint, cell_to_value);
-  return std::visit(visitor, constraint.type);
-}
-
 /*
 
   using LocalConstraintState = std::variant<IdenticalLocalState, DistinctLocalState, SumEqualToLocalState, ...>;
@@ -498,25 +711,6 @@ bool CheckConstraint(const Constraint& constraint,
     - min 6s
 
 */
-
-class AnalyzedPuzzle {
-private:
-  Puzzle puzzle_;
-  std::vector<std::optional<ConstraintId>> cell_to_constraint_;
-};
-
-int CountCells(const Grid<std::optional<CellId>>& grid) {
-  int count = 0;
-  for (int r = 0; r < grid.num_rows(); ++r) {
-    for (int c = 0; c < grid.num_cols(); ++c) {
-      const std::optional<CellId> cell = grid.Get(r, c);
-      if (cell.has_value()) {
-	++count;
-      }
-    }
-  }
-  return count;
-}
 
 class PositionGraph {
 public:
@@ -704,6 +898,14 @@ public:
     return allowed_positions;
   }
 
+  bool IsCellPlaced(CellId cell) const {
+    return cell_is_placed_[cell];
+  }
+
+  int num_cells() const {
+    return num_cells_;
+  }
+  
   Grid<char> MakePrintGridForPositions(const std::vector<Position>& positions) {
     std::unordered_map<CellId, std::pair<int, int>> cell_to_rc;
     Grid<char> print_grid(grid_.num_rows() * 4, grid_.num_cols() * 5, ' ');
@@ -1021,7 +1223,7 @@ private:
     std::unordered_set<CellId> visited;
     return FindAndFlipAugmentingPathHelper(start, visited, UNMATCHED);
   }
-
+  
   bool FindAndFlipAugmentingPath() {
     for (CellId cell = 0; cell < num_cells_; ++cell) {
       if (FindAndFlipAugmentingPathStartingFrom(cell)) {
@@ -1043,7 +1245,7 @@ private:
   
   // Only needed for debug printing.
   Grid<std::optional<CellId>> grid_;
-  
+
   int num_cells_ = 0;
 
   // neighbors_[i] is a list of the CellIds that are connected to the cell with
@@ -1063,27 +1265,313 @@ private:
   // graph is bipartite.
   std::vector<bool> cell_is_even_;
 };
-					     
 
-class BoardState {
-  
+class DominoManager {
+public:
+  explicit DominoManager(const Puzzle& puzzle) {
+    domino_states_.resize(puzzle.dominos.size(), {.placed = false});
+    num_remaining_dominos_ = domino_states_.size();
+  }
+
+  void MakeMove(const Move& move) {
+    domino_states_[move.domino.id].placed = true;
+    --num_remaining_dominos_;
+  }
+
+  void UnmakeMove(const Move& move) {
+    domino_states_[move.domino.id].placed = false;
+    ++num_remaining_dominos_;
+  }
+
+  bool IsDominoPlaced(DominoId domino_id) const {
+    return domino_states_[domino_id].placed;
+  }
+
+  bool IsDominoPlaced(const Domino& domino) const {
+    return IsDominoPlaced(domino.id);
+  }
+
+  int NumRemainingDominos() const {
+    return num_remaining_dominos_;
+  }
+
+  int num_dominos() const {
+    return domino_states_.size();
+  }
+
 private:
-  void MakeMove(const Move move);
-  void Backtrack();
-  
-  AnalyzedPuzzle puzzle_;
-
-  struct Step {
-    Move move;
-
-    // Backtracking info.
-    std::vector<Move> culled_moves;
+  struct DominoState {
+    bool placed = false;
   };
 
-  std::vector<Step> steps_;
+  std::vector<DominoState> domino_states_;
+  int num_remaining_dominos_ = 0;
+};
+					     
+std::vector<Move> AllMoves(const PositionGraph& position_graph,
+			   const std::vector<Domino>& dominos) {
+  std::vector<Move> moves;
+  for (const Position& position : position_graph.AllAllowedPositions()) {
+    for (const Domino domino : dominos) {
+      moves.push_back({
+	  .position = position,
+	  .domino = domino,
+	  .flipped = false,
+	});
+      if (!domino.IsDouble()) {
+	moves.push_back({
+	    .position = position,
+	    .domino = domino,
+	    .flipped = true,
+	  });
+      }
+    }
+  }
+  return moves;
+}
+
+std::vector<Move> FilterAllowedMoves(const std::vector<Move> moves,
+				     const PositionGraph& position_graph,
+				     const DominoManager& domino_manager,
+				     ConstraintManager& constraint_manager) {
+  // Make a set of allowed positions.
+  std::unordered_set<PositionId> allowed_positions;
+  for (const Position& position : position_graph.AllAllowedPositions()) {
+    allowed_positions.insert(position.GetId());
+  }
+  
+  std::vector<Move> filtered_moves;
+  for (const Move& move : moves) {
+    if (allowed_positions.count(move.position.GetId()) == 0) {
+      continue;
+    }
+    if (domino_manager.IsDominoPlaced(move.domino)) {
+      continue;
+    }
+    if (!constraint_manager.IsValidMove(move)) {
+      continue;
+    }
+    filtered_moves.push_back(move);
+  }
+
+  return filtered_moves;
+}
+				     
+struct MoveGrouping {
+  std::vector<std::vector<Move>> cell_to_moves;
+  std::vector<std::vector<Move>> domino_to_moves;
+};
+
+MoveGrouping GroupMoves(const std::vector<Move>& moves, int num_cells, int num_dominos) {
+  MoveGrouping grouping;
+  grouping.cell_to_moves.resize(num_cells);
+  grouping.domino_to_moves.resize(num_dominos);
+
+  for (const Move& move : moves) {
+    grouping.cell_to_moves[move.position.lower_cell].push_back(move);
+    grouping.cell_to_moves[move.position.upper_cell].push_back(move);
+    grouping.domino_to_moves[move.domino.id].push_back(move);
+  }
+
+  return grouping;
+}
+
+const std::vector<Move>& SelectBranchPoint(const MoveGrouping& grouping,
+					   const PositionGraph& position_graph,
+					   const DominoManager& domino_manager) {
+  const std::vector<Move>* best_branch_point = nullptr;
+  int best_branching_factor = std::numeric_limits<int>::max();
+  
+  for (int cell = 0; cell < grouping.cell_to_moves.size(); ++cell) {
+    if (position_graph.IsCellPlaced(cell)) continue;
+    const std::vector<Move>& moves = grouping.cell_to_moves[cell];
+    if (moves.size() < best_branching_factor) {
+      best_branch_point = &moves;
+      best_branching_factor = moves.size();
+    }
+  }
+  
+  for (int domino = 0; domino < grouping.domino_to_moves.size(); ++domino) {
+    if (domino_manager.IsDominoPlaced(domino)) continue;
+    const std::vector<Move>& moves = grouping.domino_to_moves[domino];
+    if (moves.size() < best_branching_factor) {
+      best_branch_point = &moves;
+      best_branching_factor = moves.size();
+    }
+  }
+
+  if (best_branch_point == nullptr) {
+    die("best_branch_point == nullptr");
+  }
+
+  return *best_branch_point;
+}
+
+class BoardState {
+public:
+  explicit BoardState(const Puzzle& puzzle)
+    : puzzle_(puzzle),
+      position_graph_(puzzle),
+      domino_manager_(puzzle),
+      constraint_manager_(puzzle),
+      all_moves_(AllMoves(position_graph_, puzzle.dominos)) {
+    std::vector<Move> valid_first_moves =
+      FilterAllowedMoves(all_moves_, position_graph_,
+			 domino_manager_, constraint_manager_);
+    steps_.push_back({
+	.move = std::nullopt,
+	.remaining_moves = std::move(valid_first_moves),
+      });
+  }
+
+  const std::vector<Move>& CurrentAllowedMoves() const {
+    return steps_.back().remaining_moves;
+  }
+
+  int num_cells() const {
+    return position_graph_.num_cells();
+  }
+
+  int num_dominos() const {
+    return domino_manager_.num_dominos();
+  }
+
+  bool IsSolved() const {
+    return domino_manager_.NumRemainingDominos() == 0;
+  }
+
+  bool Solve() {
+    if (IsSolved()) {
+      return true;
+    }
+    
+    const MoveGrouping grouping =
+      GroupMoves(CurrentAllowedMoves(), num_cells(), num_dominos());
+    const std::vector<Move>& branch =
+      SelectBranchPoint(grouping, position_graph_, domino_manager_);
+
+    if (branch.empty()) {
+      return false;
+    }
+
+    for (const Move& move : branch) {
+      MakeMove(move);
+      if (Solve()) {
+	return true;
+      }
+      Backtrack();
+    }
+
+    return false;
+  }
+
+  void DebugPrint() {
+    std::unordered_map<CellId, std::pair<int, int>> cell_to_rc;
+    const Grid<std::optional<CellId>>& grid = puzzle_.grid;
+    Grid<char> print_grid(grid.num_rows() * 4, grid.num_cols() * 5, ' ');
+    for (int r = 0; r < grid.num_rows(); ++r) {
+      for (int c = 0; c < grid.num_cols(); ++c) {
+	const std::optional<CellId> cell = grid.Get(r, c);
+	if (!cell.has_value()) {
+	  continue;
+	}
+	cell_to_rc[*cell] = std::make_pair(r, c);
+	print_grid.Set(r * 4,     c * 5,     '+');
+	print_grid.Set(r * 4,     c * 5 + 1, '-');
+	print_grid.Set(r * 4,     c * 5 + 2, '-');
+	print_grid.Set(r * 4,     c * 5 + 3, '-');
+	print_grid.Set(r * 4,     c * 5 + 4, '+');
+	print_grid.Set(r * 4 + 1, c * 5,     '|');
+	print_grid.Set(r * 4 + 1, c * 5 + 4, '|');
+	print_grid.Set(r * 4 + 2, c * 5,     '|');
+	print_grid.Set(r * 4 + 2, c * 5 + 4, '|');
+	print_grid.Set(r * 4 + 3, c * 5,     '+');
+	print_grid.Set(r * 4 + 3, c * 5 + 1, '-');
+	print_grid.Set(r * 4 + 3, c * 5 + 2, '-');
+	print_grid.Set(r * 4 + 3, c * 5 + 3, '-');
+	print_grid.Set(r * 4 + 3, c * 5 + 4, '+');
+      }
+    }
+
+    for (const Step& step : steps_) {
+      if (!step.move.has_value()) continue;
+      const auto [lower_cell, lower_value] = step.move->GetLowerAssignment();
+      const auto [upper_cell, upper_value] = step.move->GetUpperAssignment();
+      const auto [r1, c1] = cell_to_rc[lower_cell];
+      const auto [r2, c2] = cell_to_rc[upper_cell];
+      const int dr = r2 - r1;
+      const int dc = c2 - c1;
+      if (dr == 1 && dc == 0) {
+	print_grid.Set(r1 * 4 + 2, c1 * 5 + 2, '*');
+	print_grid.Set(r1 * 4 + 3, c1 * 5 + 2, '*');
+	print_grid.Set(r1 * 4 + 4, c1 * 5 + 2, '*');
+	print_grid.Set(r1 * 4 + 5, c1 * 5 + 2, '*');
+	print_grid.Set(r1 * 4 + 1, c1 * 5 + 2, lower_value + '0');
+	print_grid.Set(r1 * 4 + 6, c1 * 5 + 2, upper_value + '0');
+      } else if (dr == -1 && dc == 0) {
+	print_grid.Set(r2 * 4 + 2, c1 * 5 + 2, '*');
+	print_grid.Set(r2 * 4 + 3, c1 * 5 + 2, '*');
+	print_grid.Set(r2 * 4 + 4, c1 * 5 + 2, '*');
+	print_grid.Set(r2 * 4 + 5, c1 * 5 + 2, '*');
+	print_grid.Set(r2 * 4 + 1, c1 * 5 + 2, upper_value + '0');
+	print_grid.Set(r2 * 4 + 6, c1 * 5 + 2, lower_value + '0');
+      } else if (dr == 0 && dc == 1) {
+	print_grid.Set(r1 * 4 + 1, c1 * 5 + 3, '_');
+	print_grid.Set(r1 * 4 + 1, c1 * 5 + 4, '_');
+	print_grid.Set(r1 * 4 + 1, c1 * 5 + 5, '_');
+	print_grid.Set(r1 * 4 + 1, c1 * 5 + 6, '_');
+	print_grid.Set(r1 * 4 + 1, c1 * 5 + 2, lower_value + '0');
+	print_grid.Set(r1 * 4 + 1, c1 * 5 + 7, upper_value + '0'); 
+     } else if (dr == 0 && dc == -1) {
+	print_grid.Set(r1 * 4 + 1, c2 * 5 + 3, '_');
+	print_grid.Set(r1 * 4 + 1, c2 * 5 + 4, '_');
+	print_grid.Set(r1 * 4 + 1, c2 * 5 + 5, '_');
+	print_grid.Set(r1 * 4 + 1, c2 * 5 + 6, '_');
+	print_grid.Set(r1 * 4 + 1, c2 * 5 + 2, upper_value + '0');
+	print_grid.Set(r1 * 4 + 1, c2 * 5 + 7, lower_value + '0'); 
+      } else {
+	die("Invalid connection after soliving");
+      }
+    }
+
+    PrintCharGrid(print_grid);
+    std::cout << std::endl << std::endl;
+  }
+  
+private:
+  void MakeMove(const Move move) {
+    position_graph_.PlacePiece(move.position);
+    domino_manager_.MakeMove(move);
+    constraint_manager_.MakeMove(move);
+    std::vector<Move> remaining_moves =
+      FilterAllowedMoves(CurrentAllowedMoves(), position_graph_,
+			 domino_manager_, constraint_manager_);
+    steps_.push_back({
+	.move = move,
+	.remaining_moves = std::move(remaining_moves),
+      });
+  }
+
+  void Backtrack() {
+    Move last_move = *steps_.back().move;
+    position_graph_.UnplacePiece(last_move.position);
+    domino_manager_.UnmakeMove(last_move);
+    constraint_manager_.UnmakeMove(last_move);
+    steps_.pop_back();
+  }
+  
+  struct Step {
+    std::optional<Move> move;
+    std::vector<Move> remaining_moves;
+  };
+
+  Puzzle puzzle_;
   PositionGraph position_graph_;
-  std::vector<Move> allowed_next_moves_;
-  std::vector<std::optional<int>> cell_to_value_;
+  DominoManager domino_manager_;
+  ConstraintManager constraint_manager_;
+  std::vector<Move> all_moves_;
+
+  std::vector<Step> steps_;
 };
 
 
@@ -1104,30 +1592,35 @@ int main(int argc, char* argv[]) {
   PositionGraph graph(puzzle);
   graph.DebugPrint();
 
-  std::cout << "Enter command to place/unplace, like p 0 1 or u 2 3" << std::endl;
-  std::cout << "Empty line to quit" << std::endl;
-  std::string line;
-  std::getline(std::cin, line);
-  for (; !line.empty(); std::getline(std::cin, line)) {
-    const std::vector<std::string> parts = Split(line, ' ');
-    if (parts.size() != 3) {
-      std::cerr << "Wrong number of arugments" << std::endl;
-      continue;
-    }
-    std::string command = parts[0];
-      CellId a = ParseValue(parts[1]);
-      CellId b = ParseValue(parts[2]);
-    if (command == "p") {
-      graph.PlacePiece({.lower_cell = a, .upper_cell = b});
-      graph.DebugPrint();
-    } else if (command == "u") {
-      graph.UnplacePiece({.lower_cell = a, .upper_cell = b});
-      graph.DebugPrint();
-    } else {
-      std::cerr << "Unrecognized command: " << command << std::endl;
-      continue;
-    }
-  }
+  // std::cout << "Enter command to place/unplace, like p 0 1 or u 2 3" << std::endl;
+  // std::cout << "Empty line to quit" << std::endl;
+  // std::string line;
+  // std::getline(std::cin, line);
+  // for (; !line.empty(); std::getline(std::cin, line)) {
+  //   const std::vector<std::string> parts = Split(line, ' ');
+  //   if (parts.size() != 3) {
+  //     std::cerr << "Wrong number of arugments" << std::endl;
+  //     continue;
+  //   }
+  //   std::string command = parts[0];
+  //     CellId a = ParseValue(parts[1]);
+  //     CellId b = ParseValue(parts[2]);
+  //   if (command == "p") {
+  //     graph.PlacePiece({.lower_cell = a, .upper_cell = b});
+  //     graph.DebugPrint();
+  //   } else if (command == "u") {
+  //     graph.UnplacePiece({.lower_cell = a, .upper_cell = b});
+  //     graph.DebugPrint();
+  //   } else {
+  //     std::cerr << "Unrecognized command: " << command << std::endl;
+  //     continue;
+  //   }
+  // }
 
+  BoardState board_state(puzzle);
+  const bool success = board_state.Solve();
+  std::cout << "Solve result: " << success << std::endl;
+  board_state.DebugPrint();
+  
   return 0;
 }
