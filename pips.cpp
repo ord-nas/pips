@@ -64,7 +64,7 @@ struct Position {
   CellId upper_cell;
 
   PositionId GetId() const {
-    return static_cast<PositionId>(lower_cell) << 8 + upper_cell;
+    return (static_cast<PositionId>(lower_cell) << 8) + upper_cell;
   }
 };
 
@@ -88,6 +88,18 @@ struct Move {
       return std::make_pair(position.upper_cell, domino.upper_value);
     }
   }
+
+  void DebugPrint() const {
+    std::cout << "Position " << static_cast<int>(position.lower_cell) << " "
+	      << static_cast<int>(position.upper_cell) << " with id "
+	      << static_cast<int>(position.GetId()) << ", with domino "
+	      << static_cast<int>(domino.id) << " ("
+	      << static_cast<int>(domino.lower_value) << ", "
+	      << static_cast<int>(domino.upper_value) << "), "
+	      << "flipped = " << flipped
+	      << std::endl;
+  }
+  
 };
 
 struct Identical {};
@@ -758,10 +770,11 @@ public:
     Solve();
   }
   
-  void PlacePiece(const Position& position) {
+  bool PlacePiece(const Position& position) {
     // TODO remove this eventually.
     if (IsPlaced(position.lower_cell) || IsPlaced(position.upper_cell)) {
-      die("Can't place piece over cells that are already placed");
+      return false;
+      //die("Can't place piece over cells that are already placed");
     }
     if (IsUnmatched(position.lower_cell) || IsUnmatched(position.upper_cell)) {
       die("Internal error: PositionGraph is in invalid unmatched state");
@@ -800,6 +813,8 @@ public:
 	die("Internal error: cannot repair PositionGraph after placement");
       }
     }
+
+    return true;
   }
 
   void UnplacePiece(const Position& position) {
@@ -1540,7 +1555,22 @@ public:
   
 private:
   void MakeMove(const Move move) {
-    position_graph_.PlacePiece(move.position);
+    std::cout << "Making move: ";
+    move.DebugPrint();
+    bool success = position_graph_.PlacePiece(move.position);
+    if (!success) {
+      DebugPrint();
+      move.DebugPrint();
+      die("PlacePiece failed");
+    }
+    // position_graph_.DebugPrint();
+    // std::cout << "Allowed positions:" << std::endl;
+    // for (const Position& position : position_graph_.AllAllowedPositions()) {
+    //   std::cout << static_cast<int>(position.lower_cell) << ", "
+    // 		<< static_cast<int>(position.upper_cell) << " with id "
+    // 		<< static_cast<int>(position.GetId())
+    // 		<< std::endl;
+    // }
     domino_manager_.MakeMove(move);
     constraint_manager_.MakeMove(move);
     std::vector<Move> remaining_moves =
@@ -1554,6 +1584,8 @@ private:
 
   void Backtrack() {
     Move last_move = *steps_.back().move;
+    std::cout << "Backtracking move: ";
+    last_move.DebugPrint();
     position_graph_.UnplacePiece(last_move.position);
     domino_manager_.UnmakeMove(last_move);
     constraint_manager_.UnmakeMove(last_move);
