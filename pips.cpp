@@ -497,16 +497,29 @@ private:
 };
 
 
-std::vector<std::string> ReadNonEmptyLines() {
+std::vector<std::string> ReadNonEmptyLines(int end_after = 1) {
+  int consecutive_empty_count = 0;
   std::vector<std::string> lines;
   for (;;) {
     std::string line;
     std::getline(std::cin, line);
+    lines.push_back(line);
+
     if (line.empty()) {
+      ++consecutive_empty_count;
+    } else {
+      consecutive_empty_count = 0;
+    }
+
+    if (consecutive_empty_count >= end_after) {
       break;
     }
-    lines.push_back(line);
   }
+
+  for (int i = 0; i < consecutive_empty_count; ++i) {
+    lines.pop_back();
+  }
+
   return lines;
 }
 
@@ -635,8 +648,8 @@ Puzzle ReadPuzzle() {
   std::cout << " - 0 for empty cell" << std::endl;
   std::cout << " - space for no cell" << std::endl;
   std::cout << " - letters for constraint groups" << std::endl;
-  std::cout << " - empty line to end" << std::endl;
-  const std::vector<std::string> grid_lines = ReadNonEmptyLines();
+  std::cout << " - double empty line to end" << std::endl;
+  const std::vector<std::string> grid_lines = ReadNonEmptyLines(/*end_after=*/2);
 
   std::cout << "Enter the constraints." << std::endl;
   std::cout << " - for example, A:6 or B:<5 or C:= or D:!=" << std::endl;
@@ -1464,6 +1477,7 @@ public:
       GroupMoves(CurrentAllowedMoves(), num_cells(), num_dominos());
     const std::vector<Move>& branch =
       SelectBranchPoint(grouping, position_graph_, domino_manager_);
+    // std::cout << "Branching factor: " << branch.size() << ", ";
 
     if (branch.empty()) {
       return false;
@@ -1555,8 +1569,8 @@ public:
   
 private:
   void MakeMove(const Move move) {
-    std::cout << "Making move: ";
-    move.DebugPrint();
+    // std::cout << "Making move: ";
+    // move.DebugPrint();
     bool success = position_graph_.PlacePiece(move.position);
     if (!success) {
       DebugPrint();
@@ -1584,8 +1598,8 @@ private:
 
   void Backtrack() {
     Move last_move = *steps_.back().move;
-    std::cout << "Backtracking move: ";
-    last_move.DebugPrint();
+    // std::cout << "Backtracking move: ";
+    // last_move.DebugPrint();
     position_graph_.UnplacePiece(last_move.position);
     domino_manager_.UnmakeMove(last_move);
     constraint_manager_.UnmakeMove(last_move);
