@@ -1477,7 +1477,7 @@ public:
       GroupMoves(CurrentAllowedMoves(), num_cells(), num_dominos());
     const std::vector<Move>& branch =
       SelectBranchPoint(grouping, position_graph_, domino_manager_);
-    // std::cout << "Branching factor: " << branch.size() << ", ";
+    std::cout << "Branching factor: " << branch.size() << ", ";
 
     if (branch.empty()) {
       return false;
@@ -1569,8 +1569,8 @@ public:
   
 private:
   void MakeMove(const Move move) {
-    // std::cout << "Making move: ";
-    // move.DebugPrint();
+    std::cout << "Making move: ";
+    move.DebugPrint();
     bool success = position_graph_.PlacePiece(move.position);
     if (!success) {
       DebugPrint();
@@ -1598,8 +1598,8 @@ private:
 
   void Backtrack() {
     Move last_move = *steps_.back().move;
-    // std::cout << "Backtracking move: ";
-    // last_move.DebugPrint();
+    std::cout << "Backtracking move: ";
+    last_move.DebugPrint();
     position_graph_.UnplacePiece(last_move.position);
     domino_manager_.UnmakeMove(last_move);
     constraint_manager_.UnmakeMove(last_move);
@@ -1670,3 +1670,4 @@ int main(int argc, char* argv[]) {
   
   return 0;
 }
+
