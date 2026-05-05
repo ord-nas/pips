@@ -372,9 +372,8 @@ struct Puzzle {
       }
     }
 
-    // Print the grid with cell ids.
-    PrintCharGrid(print_grid);
-    std::cout << std::endl << std::endl;
+    // Create a copy for cell ids.
+    const Grid<char> cell_id_grid = print_grid;
 
     // Clear the cell ids.
     for (int r = 0; r < grid.num_rows(); ++r) {
@@ -413,16 +412,21 @@ struct Puzzle {
       }
     }
 
-    // Print the grid with constraint labels.
-    PrintCharGrid(print_grid);
-    std::cout << std::endl << std::endl;
+    // Create a copy for the constraint labels.
+    const Grid<char> constraint_grid = print_grid;
 
+    // Print the grids side by side;
+    PrintCharGridsLeftToRight({cell_id_grid, constraint_grid});
+    std::cout << std::endl;
+
+    // Print dominos.
     for (const Domino& domino : dominos) {
       std::cout << static_cast<char>(domino.lower_value + '0')
 		<< '|'
 		<< static_cast<char>(domino.upper_value + '0')
 		<< std::endl;
     }
+    std::cout << std::endl;
   }
 };
 
@@ -1114,6 +1118,7 @@ public:
       MakePrintGridForPositions(AllAllowedPositions());
     
     PrintCharGridsLeftToRight({current_grid, all_valid_grid});
+    std::cout << std::endl;
   }
   
 private:
@@ -1773,7 +1778,7 @@ int main(int argc, char* argv[]) {
 
     BoardState board_state(puzzle);
     const bool success = board_state.Solve();
-    std::cout << "Solve result: " << success << std::endl;
+    std::cout << std::endl << "Solve result: " << success << std::endl << std::endl;
     board_state.DebugPrint();
   }
   
