@@ -9,6 +9,12 @@
 
 namespace json {
 
+// Print the given error message and abort.
+void die(const std::string& message) {
+  std::cout << message << std::endl;
+  exit(1);
+}
+  
 struct JsonValue;
 
 struct JsonNull {};
@@ -25,6 +31,89 @@ struct JsonValue :
     bool,
     JsonNull> {
   using variant::variant;
+
+  const JsonValue& Get(const std::string& key) const {
+    if (const auto* obj = std::get_if<JsonObject>(this)) {
+      return *(obj->at(key));
+    } else {
+      die("JsonValue is not object, cannot do Get");
+    }
+  }
+
+  const std::string& AsString() const {
+    if (const auto* str = std::get_if<std::string>(this)) {
+      return *str;
+    } else {
+      die("JsonValue is not string, cannot do AsString");
+    }
+  }
+
+  const int& AsInt() const {
+    if (const auto* number = std::get_if<int>(this)) {
+      return *number;
+    } else {
+      die("JsonValue is not int, cannot do AsInt");
+    }
+  }
+
+  const JsonValue& Index(int index) const {
+    if (const auto* obj = std::get_if<JsonArray>(this)) {
+      return *(obj->at(index));
+    } else {
+      die("JsonValue is not object, cannot do Index");
+    }
+  }
+
+  struct Iterator {
+    using iterator_category = std::forward_iterator_tag;
+    using value_type        = JsonValue;
+    using difference_type   = std::ptrdiff_t;
+    using pointer           = const JsonValue*;
+    using reference         = const JsonValue&;
+    
+    explicit Iterator(const JsonArray& arr, int index)
+      : arr_(arr), index_(index) {}
+    
+    // Dereference
+    reference operator*() const { return *arr_[index_]; }
+    pointer operator->() { return arr_[index_].get(); }
+    
+    // Prefix increment
+    Iterator& operator++() { index_++; return *this; }  
+    
+    // Postfix increment
+    Iterator operator++(int) { Iterator tmp = *this; ++(*this); return tmp; }
+    
+    // Comparison
+    friend bool operator== (const Iterator& a, const Iterator& b) {
+      return (&a.arr_ == &b.arr_) && a.index_ == b.index_;
+    }
+    friend bool operator!= (const Iterator& a, const Iterator& b) {
+      return !(a == b);
+    }
+    
+  private:
+    const JsonArray& arr_;
+    int index_ = 0;
+  };
+  
+  // Return iterator to the first element
+  Iterator begin() const {
+    if (const auto* arr = std::get_if<JsonArray>(this)) {
+      return Iterator(*arr, 0);
+    } else {
+      die("JsonValue is not an array, cannot do begin");
+    }
+  }
+  
+  // Return iterator to one-past-the-last element
+  Iterator end() const {
+    if (const auto* arr = std::get_if<JsonArray>(this)) {
+      return Iterator(*arr, arr->size());
+    } else {
+      die("JsonValue is not an array, cannot do begin");
+    }
+  }
 };
 
 namespace internal {
@@ -123,12 +212,6 @@ void DebugPrint(const JsonValue& json, int indent = 0, bool skip_first_indent = 
   }
 }
   
-// Print the given error message and abort.
-void die(const std::string& message) {
-  std::cout << message << std::endl;
-  exit(1);
-}
-
 bool IsWhitespace(char c) {
   return c == ' ' || c == '\n' || c == '\r' || '\t';
 }
@@ -478,7 +561,7 @@ std::unique_ptr<JsonValue> ParseJsonTopLevel(const std::string& str) {
   internal::TokenStream tok_stream(tokens);
   std::unique_ptr<JsonValue> value = internal::ParseJson(tok_stream);
   if (!tok_stream.IsEmpty()) {
-    internal::die("Extraneous token at end of json string");
+    die("Extraneous token at end of json string");
   }
   return value;
 }
@@ -506,5 +589,5 @@ std::string ReadMultiLineString() {
 
   return str;
 }
-
+  
 }; // namespace json

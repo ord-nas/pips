@@ -10,6 +10,8 @@
 #include <limits>
 #include <memory>
 
+#include "json.h"
+
 void die(const std::string& msg) {
   std::cerr << msg << std::endl;
   exit(-1);
@@ -340,7 +342,7 @@ struct Puzzle {
   std::vector<Domino> dominos;
   std::vector<Constraint> constraints;
 
-  void DebugPrint() {
+  void DebugPrint() const {
     std::unordered_map<CellId, std::pair<int, int>> cell_to_rc;
     Grid<char> print_grid(grid.num_rows() * 4, grid.num_cols() * 5, ' ');
     for (int r = 0; r < grid.num_rows(); ++r) {
@@ -404,7 +406,7 @@ struct Puzzle {
 	  print_grid.Set(r * 4 + 2, c * 5 + 2, less_than->value / 10 % 10 + '0');
 	  print_grid.Set(r * 4 + 2, c * 5 + 3, less_than->value % 10 + '0');
 	} else if (const SumGreaterThan* greater_than = std::get_if<SumGreaterThan>(&constraint.type)) {
-	  print_grid.Set(r * 4 + 2, c * 5 + 1, '<');
+	  print_grid.Set(r * 4 + 2, c * 5 + 1, '>');
 	  print_grid.Set(r * 4 + 2, c * 5 + 2, greater_than->value / 10 % 10 + '0');
 	  print_grid.Set(r * 4 + 2, c * 5 + 3, greater_than->value % 10 + '0');
 	}
@@ -643,7 +645,7 @@ std::vector<Domino> ParseDominos(const std::vector<std::string>& domino_lines) {
   return dominos;
 }
 
-Puzzle ReadPuzzle() {
+Puzzle ReadCmdLinePuzzle() {
   std::cout << "Enter the grid." << std::endl;
   std::cout << " - 0 for empty cell" << std::endl;
   std::cout << " - space for no cell" << std::endl;
@@ -704,6 +706,91 @@ Puzzle ReadPuzzle() {
     .grid = std::move(grid),
     .dominos = std::move(dominos),
     .constraints = std::move(constraint_mapping.constraints),
+  };
+}
+
+Puzzle ParseNytJson(const json::JsonValue& json, const std::string& difficulty) {
+  const json::JsonValue& puzzle = json.Get(difficulty);
+  const json::JsonValue& regions = puzzle.Get("regions");
+
+  int max_row = 0;
+  int max_col = 0;
+  std::unordered_map<CellId, std::pair<int, int>> cell_to_rc;
+  CellId next_cell_id = 0;
+  std::vector<Constraint> constraints;
+  for (const json::JsonValue& region : regions) {
+    Constraint* constraint = nullptr;
+    const std::string& type = region.Get("type").AsString();
+    if (type != "empty") {
+      constraints.push_back({
+	  .id = static_cast<ConstraintId>(constraints.size()),
+	});
+      constraint = &constraints.back();
+      if (type == "sum") {
+	constraint->type = SumEqualTo{
+	  .value = static_cast<Value>(region.Get("target").AsInt()),
+	};
+      } else if (type == "greater") {
+	constraint->type = SumGreaterThan{
+	  .value = static_cast<Value>(region.Get("target").AsInt()),
+	};
+      } else if (type == "less") {
+	constraint->type = SumLessThan{
+	  .value = static_cast<Value>(region.Get("target").AsInt()),
+	};
+      } else if (type == "equals") {
+	constraint->type = Identical{};
+      } else if (type == "unequal") {
+	constraint->type = Distinct{};
+      } else {
+	die("Unrecognized constraint type: " + type);
+      }
+    }
+    for (const json::JsonValue& indices : region.Get("indices")) {
+      const int r = indices.Index(0).AsInt();
+      const int c = indices.Index(1).AsInt();
+      max_row = std::max(max_row, r);
+      max_col = std::max(max_col, c);
+      CellId cell_id = next_cell_id++;
+      cell_to_rc[cell_id] = std::make_pair(r, c);
+      if (constraint != nullptr) {
+	constraint->cells.push_back(cell_id);
+      }
+    }
+  }
+
+  Grid<std::optional<CellId>> grid(max_row + 1, max_col + 1);
+  for (const auto& [cell, rc] : cell_to_rc) {
+    grid.Set(rc.first, rc.second, cell);
+  }
+
+  std::vector<Domino> dominos;
+  for (const json::JsonValue& domino : puzzle.Get("dominoes")) {
+    const Value a = domino.Index(0).AsInt();
+    const Value b = domino.Index(1).AsInt();
+    dominos.push_back({
+	.id = static_cast<DominoId>(dominos.size()),
+	.lower_value = std::min(a, b),
+	.upper_value = std::max(a, b),
+      });
+  }
+
+  std::cout << "got here" << std::endl;
+
+  return {
+    .grid = std::move(grid),
+    .dominos = std::move(dominos),
+    .constraints = std::move(constraints),
+  };
+}
+
+std::vector<Puzzle> ReadNytPuzzles() {
+  std::string str = json::ReadMultiLineString();
+  std::unique_ptr<json::JsonValue> json = json::ParseJsonTopLevel(str);
+  return {
+    ParseNytJson(*json, "easy"),
+    ParseNytJson(*json, "medium"),
+    ParseNytJson(*json, "hard"),
   };
 }
 
@@ -1632,41 +1719,45 @@ int main(int argc, char* argv[]) {
   // std::variant<int, float, std::string> v = "Hello";
   // std::visit([](auto&& arg) { std::cout << arg; }, v);
   
-  Puzzle puzzle = ReadPuzzle();  
-  puzzle.DebugPrint();
+  // std::vector<Puzzle> puzzles = ReadNytPuzzles();
+  std::vector<Puzzle> puzzles = {ReadCmdLinePuzzle()};
 
-  PositionGraph graph(puzzle);
-  graph.DebugPrint();
+  for (const Puzzle& puzzle : puzzles) {
+    puzzle.DebugPrint();
 
-  // std::cout << "Enter command to place/unplace, like p 0 1 or u 2 3" << std::endl;
-  // std::cout << "Empty line to quit" << std::endl;
-  // std::string line;
-  // std::getline(std::cin, line);
-  // for (; !line.empty(); std::getline(std::cin, line)) {
-  //   const std::vector<std::string> parts = Split(line, ' ');
-  //   if (parts.size() != 3) {
-  //     std::cerr << "Wrong number of arugments" << std::endl;
-  //     continue;
-  //   }
-  //   std::string command = parts[0];
-  //     CellId a = ParseValue(parts[1]);
-  //     CellId b = ParseValue(parts[2]);
-  //   if (command == "p") {
-  //     graph.PlacePiece({.lower_cell = a, .upper_cell = b});
-  //     graph.DebugPrint();
-  //   } else if (command == "u") {
-  //     graph.UnplacePiece({.lower_cell = a, .upper_cell = b});
-  //     graph.DebugPrint();
-  //   } else {
-  //     std::cerr << "Unrecognized command: " << command << std::endl;
-  //     continue;
-  //   }
-  // }
+    PositionGraph graph(puzzle);
+    graph.DebugPrint();
 
-  BoardState board_state(puzzle);
-  const bool success = board_state.Solve();
-  std::cout << "Solve result: " << success << std::endl;
-  board_state.DebugPrint();
+    // std::cout << "Enter command to place/unplace, like p 0 1 or u 2 3" << std::endl;
+    // std::cout << "Empty line to quit" << std::endl;
+    // std::string line;
+    // std::getline(std::cin, line);
+    // for (; !line.empty(); std::getline(std::cin, line)) {
+    //   const std::vector<std::string> parts = Split(line, ' ');
+    //   if (parts.size() != 3) {
+    //     std::cerr << "Wrong number of arugments" << std::endl;
+    //     continue;
+    //   }
+    //   std::string command = parts[0];
+    //     CellId a = ParseValue(parts[1]);
+    //     CellId b = ParseValue(parts[2]);
+    //   if (command == "p") {
+    //     graph.PlacePiece({.lower_cell = a, .upper_cell = b});
+    //     graph.DebugPrint();
+    //   } else if (command == "u") {
+    //     graph.UnplacePiece({.lower_cell = a, .upper_cell = b});
+    //     graph.DebugPrint();
+    //   } else {
+    //     std::cerr << "Unrecognized command: " << command << std::endl;
+    //     continue;
+    //   }
+    // }
+
+    BoardState board_state(puzzle);
+    const bool success = board_state.Solve();
+    std::cout << "Solve result: " << success << std::endl;
+    board_state.DebugPrint();
+  }
   
   return 0;
 }
