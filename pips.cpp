@@ -709,9 +709,8 @@ Puzzle ReadCmdLinePuzzle() {
   };
 }
 
-Puzzle ParseNytJson(const json::JsonValue& json, const std::string& difficulty) {
-  const json::JsonValue& puzzle = json.Get(difficulty);
-  const json::JsonValue& regions = puzzle.Get("regions");
+Puzzle ParseJson(const json::JsonValue& json) {
+  const json::JsonValue& regions = json.Get("regions");
 
   int max_row = 0;
   int max_col = 0;
@@ -765,7 +764,7 @@ Puzzle ParseNytJson(const json::JsonValue& json, const std::string& difficulty) 
   }
 
   std::vector<Domino> dominos;
-  for (const json::JsonValue& domino : puzzle.Get("dominoes")) {
+  for (const json::JsonValue& domino : json.Get("dominoes")) {
     const Value a = domino.Index(0).AsInt();
     const Value b = domino.Index(1).AsInt();
     dominos.push_back({
@@ -774,8 +773,6 @@ Puzzle ParseNytJson(const json::JsonValue& json, const std::string& difficulty) 
 	.upper_value = std::max(a, b),
       });
   }
-
-  std::cout << "got here" << std::endl;
 
   return {
     .grid = std::move(grid),
@@ -788,9 +785,29 @@ std::vector<Puzzle> ReadNytPuzzles() {
   std::string str = json::ReadMultiLineString();
   std::unique_ptr<json::JsonValue> json = json::ParseJsonTopLevel(str);
   return {
-    ParseNytJson(*json, "easy"),
-    ParseNytJson(*json, "medium"),
-    ParseNytJson(*json, "hard"),
+    ParseJson(json->Get("easy")),
+    ParseJson(json->Get("medium")),
+    ParseJson(json->Get("hard")),
+  };
+}
+
+std::vector<Puzzle> ReadArchivePuzzles(const std::string& date) {
+  std::string str = json::ReadMultiLineString();
+  std::unique_ptr<json::JsonValue> json = json::ParseJsonTopLevel(str);
+  const json::JsonValue* puzzles_for_date = nullptr;
+  for (const json::JsonValue& entry : *json) {
+    if (entry.Get("print_date").AsString() == date) {
+      puzzles_for_date = &entry;
+      break;
+    }
+  }
+  if (puzzles_for_date == nullptr) {
+    return {};
+  }
+  return {
+    ParseJson(puzzles_for_date->Get("easy_puzzle")),
+    ParseJson(puzzles_for_date->Get("medium_puzzle")),
+    ParseJson(puzzles_for_date->Get("hard_puzzle")),
   };
 }
 
@@ -1719,8 +1736,9 @@ int main(int argc, char* argv[]) {
   // std::variant<int, float, std::string> v = "Hello";
   // std::visit([](auto&& arg) { std::cout << arg; }, v);
   
+  std::vector<Puzzle> puzzles = ReadArchivePuzzles("2026-04-30");
   // std::vector<Puzzle> puzzles = ReadNytPuzzles();
-  std::vector<Puzzle> puzzles = {ReadCmdLinePuzzle()};
+  // std::vector<Puzzle> puzzles = {ReadCmdLinePuzzle()};
 
   for (const Puzzle& puzzle : puzzles) {
     puzzle.DebugPrint();
